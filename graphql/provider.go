@@ -38,6 +38,21 @@ func Provider() *schema.Provider {
 				Type:     schema.TypeString,
 				Optional: true,
 			},
+			"max_retries": {
+				Type:     schema.TypeInt,
+				Optional: true,
+				Default:  0,
+			},
+			"retry_delay": {
+				Type:     schema.TypeInt,
+				Optional: true,
+				Default:  1000,
+			},
+			"retry_status_codes": {
+				Type:     schema.TypeSet,
+				Elem:     &schema.Schema{Type: schema.TypeInt},
+				Optional: true,
+			},
 		},
 		ResourcesMap: map[string]*schema.Resource{
 			"graphql_mutation": resourceGraphqlMutation(),

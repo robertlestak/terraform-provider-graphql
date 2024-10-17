@@ -47,6 +47,12 @@ In addition to [generic `provider` arguments](https://www.terraform.io/docs/conf
 
 * `oauth2_login_query_value_attribute` - (Optional) The dot-separated path to the attribute containing the access token value that will be extracted from the OAuth 2.0 login query or mutation response `data` (e.g. `loginAPI.accessToken`). Note: you must also define `oauth2_login_query` and `oauth2_login_query_variables` when using `oauth2_login_query_value_attribute`.
 
+* `max_retries` - (Optional) The maximum number of retries that the provider will attempt when a request fails. Default is 0 (no retries).
+
+* `retry_delay` - (Optional) The delay between retries in milliseconds. Default is 1000ms.
+
+* `retry_status_codes` - (Optional) A list of status codes that the provider will retry on. Default is `[500, 502, 503, 504, 429]`.
+
 ## Full documentation
 
 This provider's extensive documentation can be found here: [https://sullivtr.github.io/terraform-provider-graphql/docs/provider.html](https://sullivtr.github.io/terraform-provider-graphql/docs/provider.html)

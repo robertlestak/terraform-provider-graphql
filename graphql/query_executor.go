@@ -5,13 +5,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
+	"math"
 	"net/http"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/logging"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
+
+func exponentialBackoff(attempt int, multiplier int) time.Duration {
+	return time.Duration(math.Pow(2, float64(attempt))*float64(multiplier)) * time.Millisecond
+}
 
 func queryExecute(ctx context.Context, d *schema.ResourceData, m interface{}, querySource, variableSource string) (*GqlQueryResponse, []byte, error) {
 	query := d.Get(querySource).(string)
@@ -44,33 +50,62 @@ func queryExecute(ctx context.Context, d *schema.ResourceData, m interface{}, qu
 		return nil, nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, &queryBodyBuffer)
-	if err != nil {
-		return nil, nil, err
+	maxRetries := d.Get("max_retries").(int)
+	retryWaitMs := d.Get("retry_delay").(int)
+	retryableStatusCodes := d.Get("retry_status_codes").(*schema.Set).List()
+	if len(retryableStatusCodes) == 0 {
+		retryableStatusCodes = []interface{}{
+			http.StatusTooManyRequests,
+			http.StatusServiceUnavailable,
+			http.StatusGatewayTimeout,
+			http.StatusInternalServerError,
+		}
 	}
-
-	req.Header.Set("Content-Type", "application/json; charset=utf-8")
-	req.Header.Set("Accept", "application/json; charset=utf-8")
-	for key, value := range authorizationHeaders {
-		req.Header.Set(key, value.(string))
-	}
-	for key, value := range headers {
-		req.Header.Set(key, value.(string))
-	}
-
+	var resp *http.Response
+	var err error
 	client := &http.Client{}
-	if logging.IsDebugOrHigher() {
-		log.Printf("[DEBUG] Enabling HTTP requests/responses tracing")
-		client.Transport = logging.NewTransport("GraphQL", http.DefaultTransport)
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, "POST", apiURL, &queryBodyBuffer)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		req.Header.Set("Content-Type", "application/json; charset=utf-8")
+		req.Header.Set("Accept", "application/json; charset=utf-8")
+		for key, value := range authorizationHeaders {
+			req.Header.Set(key, value.(string))
+		}
+		for key, value := range headers {
+			req.Header.Set(key, value.(string))
+		}
+
+		if logging.IsDebugOrHigher() {
+			log.Printf("[DEBUG] Enabling HTTP requests/responses tracing")
+			client.Transport = logging.NewTransport("GraphQL", http.DefaultTransport)
+		}
+
+		resp, err = client.Do(req)
+		if err == nil && !contains(retryableStatusCodes, resp.StatusCode) {
+			break
+		}
+
+		if attempt < maxRetries {
+			waitTime := exponentialBackoff(attempt, retryWaitMs)
+			log.Printf("[DEBUG] Retry attempt %d/%d, waiting %s before next attempt", attempt+1, maxRetries, waitTime)
+			time.Sleep(waitTime)
+		}
 	}
 
-	resp, err := client.Do(req)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer resp.Body.Close()
 
-	body, _ := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	var gqlResponse GqlQueryResponse
 	if err := json.Unmarshal(body, &gqlResponse); err != nil {
@@ -78,6 +113,15 @@ func queryExecute(ctx context.Context, d *schema.ResourceData, m interface{}, qu
 	}
 
 	return &gqlResponse, body, nil
+}
+
+func contains(set []interface{}, item int) bool {
+	for _, v := range set {
+		if v.(int) == item {
+			return true
+		}
+	}
+	return false
 }
 
 // isJSON will check if s can be interpreted as valid JSON, and return an unmarshalled struct representing the JSON if it can.
